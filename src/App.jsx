@@ -156,13 +156,8 @@ function getSchedStatus(s, td) {
   const tid = s.taskId || SCHED_TASK_MAP[s.label] || s.blockId;
   if (tid) {
     const val = td[tid] || 0;
-    // For counter tasks, "done" means reaching the target (not just > 0)
-    let target = null;
-    if (s.customType === "counter" && s.target != null) {
-      target = Number(s.target);
-    } else if (s.taskId && TASK_BY_ID[s.taskId]) {
-      target = TASK_BY_ID[s.taskId].target;
-    }
+    // target: explicit block override > TASK_BY_ID default > null (timer: any val > 0 = done)
+    const target = s.target != null ? Number(s.target) : (TASK_BY_ID[tid]?.target ?? null);
     const isDone = target != null ? val >= target : val > 0;
     if (isDone) return "done";
   }
@@ -337,28 +332,28 @@ function getWhatShouldIDo(schedule, td, workLogs, today, todayTasks) {
   const todayLogs = workLogs?.[today] || [];
 
   if (current) {
-    const tid = current.taskId || SCHED_TASK_MAP[current.label];
-    const task = tid ? TASK_BY_ID[tid] : null;
+    const tid = current.taskId || SCHED_TASK_MAP[current.label] || current.blockId;
+    const task = tid ? todayTasks.find(t => t.id === tid) : null;
     if (task) {
       const val = td[tid] || 0;
       if (task.unit === "min") {
         const logged = todayLogs.filter(l => l.taskId === tid).reduce((s, l) => s + l.minutes, 0);
         const rem = task.target - logged;
-        if (rem > 0) return `It's ${current.label} time. You've logged ${formatMin(logged)} of ${formatMin(task.target)}. Start a focus block now.`;
-        return `${current.label} target hit. Stay on task.`;
+        if (rem > 0) return `It's ${task.label} time. You've logged ${formatMin(logged)} of ${formatMin(task.target)}. Start a focus block now.`;
+        return `${task.label} target hit. Stay on task.`;
       }
       const rem = task.target - val;
-      if (rem > 0) return `You're in ${current.label}. ${rem} more ${task.unit} to target. Stop reading this and start.`;
+      if (rem > 0) return `You're in ${task.label}. ${rem} more ${task.unit} to target. Stop reading this and start.`;
     }
     return `You're in your ${current.label} block. Focus up and execute.`;
   }
 
   if (next && minsToNext && minsToNext <= 30) {
-    const tid = SCHED_TASK_MAP[next.label];
-    const task = tid ? TASK_BY_ID[tid] : null;
+    const tid = next.taskId || SCHED_TASK_MAP[next.label] || next.blockId;
+    const task = tid ? todayTasks.find(t => t.id === tid) : null;
     if (task && task.unit !== "min") {
       const rem = task.target - (td[tid] || 0);
-      if (rem > 0) return `${minsToNext} min before ${next.label}. You need ${rem} more ${task.unit} for ${task.label}. Use this gap.`;
+      if (rem > 0) return `${minsToNext} min before ${task.label}. You need ${rem} more ${task.unit} to hit target. Use this gap.`;
     }
     return `${next.label} starts in ${minsToNext} min. Wrap up and prepare.`;
   }
@@ -1396,6 +1391,7 @@ export default function DenizHQ() {
   const [dailyReviews, setDailyReviews] = useState(() => _ls?.data?.dailyReviews ?? {});
   const [showBriefing, setShowBriefing] = useState(false);
   const [showEOD, setShowEOD]         = useState(false);
+  const [pastReviewDate, setPastReviewDate] = useState(null); // date string for editing past day review
   const [whatModal, setWhatModal]     = useState(false);
   const [taskStreaks, setTaskStreaks]  = useState({});
   const [notifActive, setNotifActive] = useState(() => typeof Notification !== "undefined" && Notification.permission === "granted");
@@ -1809,6 +1805,13 @@ export default function DenizHQ() {
     saveDailyReview(today, rating, priorityTomorrow, summary).catch(console.error);
   }, [dailyReviews, today]);
 
+  const savePastEOD = useCallback((date, rating, priorityTomorrow, summary) => {
+    const updated = { ...dailyReviews, [date]: { rating, priorityTomorrow, summary } };
+    setDailyReviews(updated);
+    setPastReviewDate(null);
+    saveDailyReview(date, rating, priorityTomorrow, summary).catch(console.error);
+  }, [dailyReviews]);
+
   // ── Test notification ─────────────────────────────────────────────────────
   const sendTestNotification = useCallback(async () => {
     if (!("Notification" in window)) { alert("Notifications not supported in this browser."); return; }
@@ -1907,6 +1910,17 @@ export default function DenizHQ() {
           existingSummary={dailyReviews?.[today]?.summary || ""}
           onSave={saveEOD}
           onClose={() => { localStorage.setItem(`deniz-hq-eod-${today}`, "1"); setShowEOD(false); }}
+        />
+      )}
+      {pastReviewDate && (
+        <EndOfDayReview
+          data={data}
+          today={pastReviewDate}
+          workLogs={workLogs}
+          todayTasks={getTodaysTasks(getScheduleForDate(pastReviewDate, customSchedules), TASKS_BY_ID)}
+          existingSummary={dailyReviews?.[pastReviewDate]?.summary || ""}
+          onSave={(rating, priorityTomorrow, summary) => savePastEOD(pastReviewDate, rating, priorityTomorrow, summary)}
+          onClose={() => setPastReviewDate(null)}
         />
       )}
       {callModal !== false && (
@@ -2614,6 +2628,18 @@ export default function DenizHQ() {
                     </div>
                   )}
 
+                  {/* Review button — always visible for past days */}
+                  {sd !== today && (
+                    <div style={{ marginBottom:12, display:"flex", justifyContent:"flex-end" }}>
+                      <button
+                        onClick={() => setPastReviewDate(sd)}
+                        style={{ fontSize:11, fontWeight:700, color: sdReview ? "rgba(255,255,255,0.4)" : "#4ADE80", background:"transparent", border:`1px solid ${sdReview ? "rgba(255,255,255,0.1)" : "rgba(74,222,128,0.3)"}`, borderRadius:6, padding:"5px 12px", cursor:"pointer", letterSpacing:0.5 }}
+                      >
+                        {sdReview ? "EDIT REVIEW" : "+ ADD REVIEW"}
+                      </button>
+                    </div>
+                  )}
+
                   {/* Day review — summary, rating, priority */}
                   {sdReview && (
                     <>
@@ -2629,39 +2655,6 @@ export default function DenizHQ() {
                       </div>
                     </>
                   )}
-
-                  {/* Scheduled vs actual — only for tasks IN that day's schedule */}
-                  {(() => {
-                    const daySchedule = getScheduleForDate(sd, customSchedules);
-                    // Build map of time-based tasks actually scheduled that day
-                    const scheduledMins = {};
-                    for (const block of daySchedule) {
-                      const tid = block.taskId || SCHED_TASK_MAP[block.label];
-                      if (!tid) continue;
-                      const task = TASK_BY_ID[tid];
-                      if (task?.unit !== "min") continue;
-                      scheduledMins[tid] = (scheduledMins[tid] || 0) + block.dur;
-                    }
-                    const gaps = [];
-                    for (const [tid, scheduled] of Object.entries(scheduledMins)) {
-                      const logged = (workLogs[sd]||[]).filter(l=>l.taskId===tid).reduce((s,l)=>s+l.minutes,0);
-                      if (logged < scheduled) {
-                        gaps.push({ label: TASK_BY_ID[tid]?.label || tid, scheduled, logged, gap: scheduled - logged });
-                      }
-                    }
-                    if (gaps.length === 0) return null;
-                    return (
-                      <div style={{ marginBottom:12, padding:"10px 12px", borderRadius:10, background:"rgba(239,68,68,0.05)", border:"1px solid rgba(239,68,68,0.1)" }}>
-                        <div style={{ fontSize:10, fontWeight:700, color:"rgba(239,68,68,0.6)", letterSpacing:1, marginBottom:6 }}>GAPS</div>
-                        {gaps.map(g => (
-                          <div key={g.label} style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:"rgba(255,255,255,0.5)", marginBottom:2 }}>
-                            <span>{g.label}</span>
-                            <span style={{ color:"rgba(239,68,68,0.6)" }}>-{formatMin(g.gap)} unlogged</span>
-                          </div>
-                        ))}
-                      </div>
-                    );
-                  })()}
 
                   {/* Tasks */}
                   {sdTasks.map(t => {
