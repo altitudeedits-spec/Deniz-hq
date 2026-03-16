@@ -154,7 +154,18 @@ function getSchedStatus(s, td) {
   const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
   const start = parseInt(s.time) * 60, end = start + s.dur;
   const tid = s.taskId || SCHED_TASK_MAP[s.label] || s.blockId;
-  if (tid && (td[tid] || 0) > 0) return "done";
+  if (tid) {
+    const val = td[tid] || 0;
+    // For counter tasks, "done" means reaching the target (not just > 0)
+    let target = null;
+    if (s.customType === "counter" && s.target != null) {
+      target = Number(s.target);
+    } else if (s.taskId && TASK_BY_ID[s.taskId]) {
+      target = TASK_BY_ID[s.taskId].target;
+    }
+    const isDone = target != null ? val >= target : val > 0;
+    if (isDone) return "done";
+  }
   if (nowMin >= start && nowMin < end) return "now";
   if (tid && nowMin >= end) return "missed";
   return "upcoming";
@@ -1418,6 +1429,7 @@ export default function DenizHQ() {
   const customSchedulesRef   = useRef({});
   const todayPriorityRef     = useRef(null);
   const todayTasksRef        = useRef([]); // always current todayTasks for use inside callbacks
+  const revenueGoalRef       = useRef(0);
 
   const today = getToday();
 
@@ -1588,6 +1600,7 @@ export default function DenizHQ() {
   useEffect(() => { customSchedulesRef.current = customSchedules; }, [customSchedules]);
   useEffect(() => { todayPriorityRef.current = todayPriority; }, [todayPriority]);
   useEffect(() => { todayTasksRef.current = todayTasks; }, [todayTasks]);
+  useEffect(() => { revenueGoalRef.current = revenueGoal; }, [revenueGoal]);
 
   // ── Direct notification loop — fires immediately + every 30 min ───────────
   useEffect(() => {
@@ -1597,7 +1610,7 @@ export default function DenizHQ() {
       if (!("Notification" in window) || Notification.permission !== "granted") return;
       const sched = getScheduleForDate(today, customSchedulesRef.current);
       const taskData = dataRef.current?.days?.[today] || {};
-      const payload = getNotificationPayload(sched, taskData, todayPriorityRef.current);
+      const payload = getNotificationPayload(sched, taskData, todayPriorityRef.current, todayTasksRef.current, revenueGoalRef.current);
       const { title, body } = payload || { title: "Deniz HQ", body: "Stay disciplined. Execute." };
       try {
         const reg = await navigator.serviceWorker.ready;
