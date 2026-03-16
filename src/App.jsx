@@ -342,8 +342,18 @@ function generateBriefingLines(data, today, workLogs, schedule) {
   const lines = [];
   const prevDayStr = prevDay(today);
   const td_prev = data?.days?.[prevDayStr] || {};
-  const TARGETS = { ig_outreach:50, upwork:5, pushups:200, situps:200, client_work:120, ceo_work:120, content:60, sales_calls:2 };
   const TASK_LABELS = { ig_outreach:"DMs", upwork:"Upwork proposals", pushups:"pushups", situps:"situps", client_work:"min client work", ceo_work:"min CEO work", content:"min content", sales_calls:"sales calls" };
+
+  // Only evaluate tasks that were actually in yesterday's schedule
+  const prevSchedule = getScheduleForDate(prevDayStr, data?.customSchedules || {});
+  const prevTaskIds = new Set();
+  for (const block of prevSchedule) {
+    const tid = block.taskId || SCHED_TASK_MAP[block.label];
+    if (tid) prevTaskIds.add(tid);
+  }
+  const TARGETS = Object.fromEntries(
+    DEFAULT_TASKS.filter(t => prevTaskIds.has(t.id)).map(t => [t.id, t.target])
+  );
 
   const now = new Date();
   const dayName = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"][now.getDay()];
@@ -1049,13 +1059,13 @@ const TASK_PRESETS = [
 function ScheduleEditor({ draft, onChange, onSave, onCancel }) {
   const [adding, setAdding] = useState(false);
   const [editIdx, setEditIdx] = useState(null);
-  const [form, setForm] = useState({ time: "09:00", label: "", dur: 60, taskId: null });
+  const [form, setForm] = useState({ time: "09:00", label: "", dur: 60, taskId: null, category: "" });
   const [showPresets, setShowPresets] = useState(false);
 
   const sorted = [...draft].sort((a, b) => a.time.localeCompare(b.time));
 
   function openAdd() {
-    setForm({ time: "09:00", label: "", dur: 60, taskId: null });
+    setForm({ time: "09:00", label: "", dur: 60, taskId: null, category: "" });
     setAdding(true);
     setEditIdx(null);
     setShowPresets(true);
@@ -1063,20 +1073,24 @@ function ScheduleEditor({ draft, onChange, onSave, onCancel }) {
 
   function openEdit(idx) {
     const s = sorted[idx];
-    setForm({ time: s.time, label: s.label, dur: s.dur, taskId: s.taskId || null });
+    setForm({ time: s.time, label: s.label, dur: s.dur, taskId: s.taskId || null, category: s.category || "" });
     setEditIdx(idx);
     setAdding(false);
     setShowPresets(false);
   }
 
   function applyPreset(preset) {
-    setForm(f => ({ ...f, label: preset.label, dur: preset.dur, taskId: preset.taskId }));
+    setForm(f => ({ ...f, label: preset.label, dur: preset.dur, taskId: preset.taskId, category: preset.taskId ? "" : f.category }));
     setShowPresets(false);
   }
 
   function saveBlock() {
     if (!form.label.trim() || !form.time) return;
-    const block = { time: form.time, label: form.label.trim(), dur: Number(form.dur) || 60, ...(form.taskId ? { taskId: form.taskId } : {}) };
+    const block = {
+      time: form.time, label: form.label.trim(), dur: Number(form.dur) || 60,
+      ...(form.taskId ? { taskId: form.taskId } : {}),
+      ...(form.category && !form.taskId ? { category: form.category } : {}),
+    };
     let next;
     if (adding) {
       next = [...draft, block];
@@ -1111,6 +1125,7 @@ function ScheduleEditor({ draft, onChange, onSave, onCancel }) {
           <div style={{ flex:1 }}>
             <div style={{ fontSize:13, fontWeight:600, color:"#fff" }}>{s.label}</div>
             {s.taskId && <div style={{ fontSize:10, color:"rgba(255,255,255,0.3)", marginTop:1 }}>Tracks: {s.taskId}</div>}
+            {!s.taskId && s.category && <div style={{ fontSize:10, color:"rgba(255,255,255,0.25)", marginTop:1 }}>{s.category}</div>}
           </div>
           <div style={{ fontSize:11, color:"rgba(255,255,255,0.3)" }}>{formatTime(s.dur)}</div>
         </div>
@@ -1155,6 +1170,24 @@ function ScheduleEditor({ draft, onChange, onSave, onCancel }) {
             <input value={form.label} onChange={e => setForm(f => ({ ...f, label: e.target.value }))} placeholder="Block name..."
               style={{ width:"100%", padding:"8px 10px", background:"rgba(255,255,255,0.06)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:8, color:"#fff", fontSize:13, outline:"none", boxSizing:"border-box" }} />
           </div>
+
+          {/* Category — only shown for custom blocks without a linked task */}
+          {!form.taskId && (
+            <div style={{ marginBottom:10 }}>
+              <div style={{ fontSize:10, color:"rgba(255,255,255,0.4)", marginBottom:6 }}>Category (for stats breakdown)</div>
+              <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+                {["Fitness","Client Acquisition","Client Fulfilment","Offer Refinement"].map(cat => (
+                  <button key={cat} onClick={() => setForm(f => ({ ...f, category: f.category === cat ? "" : cat }))}
+                    style={{ padding:"5px 10px", borderRadius:16, fontSize:11, fontWeight:600, border:"1px solid", cursor:"pointer",
+                      borderColor: form.category===cat ? "rgba(255,255,255,0.45)" : "rgba(255,255,255,0.08)",
+                      background: form.category===cat ? "rgba(255,255,255,0.1)" : "transparent",
+                      color: form.category===cat ? "#fff" : "rgba(255,255,255,0.4)" }}>
+                    {cat}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Duration quick picks */}
           <div style={{ display:"flex", gap:6, marginBottom:12 }}>
@@ -1211,6 +1244,17 @@ export default function DenizHQ() {
   const [tab, setTab]         = useState("home");
   const [data, setData]       = useState(() => _ls?.data ?? null);
   const [loaded, setLoaded]   = useState(() => _ls?.data != null);
+  // Custom task targets — persisted to localStorage
+  const [customTargets, setCustomTargets] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("deniz_custom_targets") || "{}"); } catch { return {}; }
+  });
+  const saveCustomTargets = (next) => {
+    setCustomTargets(next);
+    localStorage.setItem("deniz_custom_targets", JSON.stringify(next));
+  };
+  // Effective tasks = DEFAULT_TASKS with custom targets merged in
+  const TASKS = DEFAULT_TASKS.map(t => ({ ...t, target: customTargets[t.id] ?? t.target }));
+  const TASKS_BY_ID = Object.fromEntries(TASKS.map(t => [t.id, t]));
   const [callModal, setCallModal]     = useState(false); // false, {} for new, or { _isEdit, _date, _index, ...callData }
   const [calDate, setCalDate]         = useState(new Date());
   const [weekOffset, setWeekOffset]   = useState(0);
@@ -2279,17 +2323,24 @@ export default function DenizHQ() {
               <div style={{ fontSize: 13, color: "rgba(255,255,255,0.3)", textAlign: "center", padding: "24px 0" }}>No trackable tasks in today&apos;s schedule</div>
             )}
             {todayTasks.map(t => {
-              const v = td[t.id]||0, done = v>=t.target, streak = taskStreaks[t.id]||0;
+              const effectiveTarget = customTargets[t.id] ?? t.target;
+              const v = td[t.id]||0, done = v>=effectiveTarget, streak = taskStreaks[t.id]||0;
               return (
                 <div key={t.id} style={{ ...S.checkRow, ...(done?S.checkDone:{}) }}>
                   <div style={S.checkLeft}>
-                    <div style={{ ...S.checkBox, ...(done?S.checkBoxDone:{}) }} onClick={() => updateTask(t.id, done?0:t.target)}>{done && I.check}</div>
+                    <div style={{ ...S.checkBox, ...(done?S.checkBoxDone:{}) }} onClick={() => updateTask(t.id, done?0:effectiveTarget)}>{done && I.check}</div>
                     <div>
                       <div style={{ ...S.checkLabel, gap:8 }}>
                         {t.icon} {t.label}
                         {streak > 0 && <span style={{ fontSize:11, fontWeight:700, color:"rgba(255,255,255,0.35)", display:"flex", alignItems:"center", gap:2 }}>{I.fire}{streak}</span>}
                       </div>
-                      <div style={S.checkTarget}>Target: {t.target} {t.unit}</div>
+                      <div style={{ ...S.checkTarget, display:"flex", alignItems:"center", gap:6 }}>
+                        Target:
+                        <input type="number" value={effectiveTarget} min="1"
+                          onChange={e => { const n = Number(e.target.value); if (n > 0) saveCustomTargets({ ...customTargets, [t.id]: n }); }}
+                          style={{ width:52, padding:"1px 4px", background:"rgba(255,255,255,0.06)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:4, color:"rgba(255,255,255,0.7)", fontSize:11, outline:"none", textAlign:"center" }} />
+                        {t.unit}
+                      </div>
                     </div>
                   </div>
                   <input type="number" style={S.checkInput} value={v||""} placeholder="0" onChange={e => updateTask(t.id, e.target.value)} />
@@ -2407,15 +2458,23 @@ export default function DenizHQ() {
                     </div>
                   )}
 
-                  {/* Scheduled vs actual summary */}
+                  {/* Scheduled vs actual — only for tasks IN that day's schedule */}
                   {(() => {
-                    const SCHED_MINS = { client_work:120, ceo_work:120, content:60 };
+                    const daySchedule = getScheduleForDate(sd, customSchedules);
+                    // Build map of time-based tasks actually scheduled that day
+                    const scheduledMins = {};
+                    for (const block of daySchedule) {
+                      const tid = block.taskId || SCHED_TASK_MAP[block.label];
+                      if (!tid) continue;
+                      const task = TASK_BY_ID[tid];
+                      if (task?.unit !== "min") continue;
+                      scheduledMins[tid] = (scheduledMins[tid] || 0) + block.dur;
+                    }
                     const gaps = [];
-                    for (const [tid, scheduled] of Object.entries(SCHED_MINS)) {
+                    for (const [tid, scheduled] of Object.entries(scheduledMins)) {
                       const logged = (workLogs[sd]||[]).filter(l=>l.taskId===tid).reduce((s,l)=>s+l.minutes,0);
-                      if (scheduled > 0 && logged < scheduled) {
-                        const taskLabel = { client_work:"Client Delivery", ceo_work:"CEO Work", content:"Content" }[tid];
-                        gaps.push({ label: taskLabel, scheduled, logged, gap: scheduled - logged });
+                      if (logged < scheduled) {
+                        gaps.push({ label: TASK_BY_ID[tid]?.label || tid, scheduled, logged, gap: scheduled - logged });
                       }
                     }
                     if (gaps.length === 0) return null;
