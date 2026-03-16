@@ -104,10 +104,30 @@ function getTodaysTasks(schedule, tasksById = TASK_BY_ID) {
   const result = [];
   for (const s of schedule) {
     const tid = s.taskId || SCHED_TASK_MAP[s.label];
-    if (!tid || seen.has(tid)) continue;
-    seen.add(tid);
-    const base = tasksById[tid];
-    if (base) result.push(s.target != null ? { ...base, target: s.target, unit: s.unit || base.unit } : base);
+    if (tid) {
+      if (seen.has(tid)) continue;
+      seen.add(tid);
+      const base = tasksById[tid];
+      if (base) result.push({
+        ...base,
+        label: s.label || base.label,
+        target: s.target != null ? s.target : base.target,
+        unit: s.unit || base.unit,
+      });
+    } else if (s.customType === "counter" && s.target != null) {
+      // Fully custom counter block with no linked DEFAULT_TASK
+      const blockId = s.blockId || ("block_" + s.label.toLowerCase().replace(/[^a-z0-9]+/g, "_"));
+      if (seen.has(blockId)) continue;
+      seen.add(blockId);
+      result.push({
+        id: blockId,
+        label: s.label,
+        target: Number(s.target),
+        unit: s.unit || "reps",
+        cat: "custom",
+        icon: null,
+      });
+    }
   }
   return result;
 }
@@ -120,7 +140,7 @@ function getScheduleForDate(ds, customSchedules = {}) {
 function getSchedStatus(s, td) {
   const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
   const start = parseInt(s.time) * 60, end = start + s.dur;
-  const tid = s.taskId || SCHED_TASK_MAP[s.label];
+  const tid = s.taskId || SCHED_TASK_MAP[s.label] || s.blockId;
   if (tid && (td[tid] || 0) > 0) return "done";
   if (nowMin >= start && nowMin < end) return "now";
   if (tid && nowMin >= end) return "missed";
@@ -1063,13 +1083,13 @@ const TASK_PRESETS = [
 function ScheduleEditor({ draft, onChange, onSave, onCancel }) {
   const [adding, setAdding] = useState(false);
   const [editIdx, setEditIdx] = useState(null);
-  const [form, setForm] = useState({ time: "09:00", label: "", dur: 60, taskId: null, category: "", customType: "timer", target: null, unit: "" });
+  const [form, setForm] = useState({ time: "09:00", label: "", dur: 60, taskId: null, category: "", customType: "timer", target: null, unit: "", blockId: "" });
   const [showPresets, setShowPresets] = useState(false);
 
   const sorted = [...draft].sort((a, b) => a.time.localeCompare(b.time));
 
   function openAdd() {
-    setForm({ time: "09:00", label: "", dur: 60, taskId: null, category: "", customType: "timer", target: null, unit: "" });
+    setForm({ time: "09:00", label: "", dur: 60, taskId: null, category: "", customType: "timer", target: null, unit: "", blockId: "" });
     setAdding(true);
     setEditIdx(null);
     setShowPresets(true);
@@ -1085,6 +1105,7 @@ function ScheduleEditor({ draft, onChange, onSave, onCancel }) {
       customType: s.customType || (isCounter ? "counter" : "timer"),
       target: s.target ?? (isCounter && task ? task.target : null),
       unit: s.unit || task?.unit || "",
+      blockId: s.blockId || "",
     });
     setEditIdx(idx);
     setAdding(false);
@@ -1100,6 +1121,7 @@ function ScheduleEditor({ draft, onChange, onSave, onCancel }) {
       customType: isCounter ? "counter" : "timer",
       target: isCounter ? (task?.target ?? null) : null,
       unit: isCounter ? (task?.unit ?? "") : "",
+      blockId: "",
     }));
     setShowPresets(false);
   }
@@ -1108,11 +1130,15 @@ function ScheduleEditor({ draft, onChange, onSave, onCancel }) {
     if (!form.label.trim() || !form.time) return;
     const task = form.taskId ? TASK_BY_ID[form.taskId] : null;
     const isCounter = task ? task.unit !== "min" : form.customType === "counter";
+    // For custom counter blocks, keep existing blockId or generate a stable one from label
+    const blockId = !form.taskId && isCounter
+      ? (form.blockId || ("block_" + form.label.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_")))
+      : undefined;
     const block = {
       time: form.time, label: form.label.trim(), dur: Number(form.dur) || 60,
       ...(form.taskId ? { taskId: form.taskId } : {}),
       ...(isCounter && form.target != null ? { target: Number(form.target), unit: form.unit || task?.unit || "" } : {}),
-      ...(!form.taskId && form.customType === "counter" ? { customType: "counter" } : {}),
+      ...(!form.taskId && isCounter && blockId ? { customType: "counter", blockId } : {}),
       ...(form.category && !form.taskId ? { category: form.category } : {}),
     };
     let next;
@@ -2068,39 +2094,47 @@ export default function DenizHQ() {
               );
             })}
 
-            {/* Quick Log — schedule-based with per-task streaks */}
+            {/* Quick Log — driven by todayTasks so labels/targets always match the calendar */}
             <div style={{ ...S.sectionLabel, marginTop: 24 }}>Quick Log</div>
+            {todayTasks.length === 0 && (
+              <div style={{ fontSize: 12, color: "rgba(255,255,255,0.25)", textAlign: "center", padding: "12px 0" }}>No trackable tasks in today&apos;s schedule</div>
+            )}
             {(() => {
-              const shown = new Set();
-              return schedule.filter(s => {
-                const tid = s.taskId || SCHED_TASK_MAP[s.label];
-                if (!tid || shown.has(tid)) return false;
-                shown.add(tid); return true;
-              }).map((s, i) => {
-                const tid = s.taskId || SCHED_TASK_MAP[s.label];
-                const task = TASK_BY_ID[tid]; if (!task) return null;
-                const v = td[tid] || 0;
-                const todayMinLogs = task.unit === "min" ? (workLogs[today] || []).filter(l => l.taskId === tid).reduce((sum, l) => sum + l.minutes, 0) : v;
+              // Build a map from task ID → schedule block for status/timing lookups
+              const blockByTaskId = {};
+              for (const s of schedule) {
+                const tid = s.taskId || SCHED_TASK_MAP[s.label] || s.blockId;
+                if (tid && !blockByTaskId[tid]) blockByTaskId[tid] = s;
+              }
+              const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+              return todayTasks.map(task => {
+                const v = td[task.id] || 0;
+                const todayMinLogs = task.unit === "min"
+                  ? (workLogs[today] || []).filter(l => l.taskId === task.id).reduce((sum, l) => sum + l.minutes, 0)
+                  : v;
                 const displayVal = task.unit === "min" ? todayMinLogs : v;
                 const pct = Math.min(displayVal / task.target, 1);
                 const done = pct >= 1;
-                const streak = taskStreaks[tid] || 0;
-                const status = getSchedStatus(s, td);
-                const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
-                const blockEnd = parseInt(s.time) * 60 + s.dur;
+                const streak = taskStreaks[task.id] || 0;
+                const sBlock = blockByTaskId[task.id];
+                const status = sBlock ? getSchedStatus(sBlock, td) : "upcoming";
+                const blockEnd = sBlock ? parseInt(sBlock.time) * 60 + sBlock.dur : Infinity;
                 const streakAtRisk = !done && streak > 0 && nowMin > blockEnd;
+                const increment = task.unit === "reps" ? 25 : task.unit === "sent" ? 10 : 1;
                 return (
-                  <div key={i} style={{ ...S.taskRow, ...(done ? S.taskRowDone : {}) }}>
+                  <div key={task.id} style={{ ...S.taskRow, ...(done ? S.taskRowDone : {}) }}>
                     <div style={S.taskLeft}>
                       <div style={S.taskIcon}>{task.icon}</div>
                       <div>
                         <div style={{ ...S.taskName, display: "flex", alignItems: "center", gap: 6 }}>
-                          {s.label !== task.label ? s.label : task.label}
+                          {task.label}
                           {streak > 0 && <span style={{ display: "flex", alignItems: "center", gap: 2, fontSize: 11, fontWeight: 700, color: streakAtRisk ? "#EF4444" : "rgba(255,255,255,0.35)" }}>
                             {I.fire}{streak}
                           </span>}
                         </div>
-                        <div style={S.taskSub}>{formatMin(displayVal)} / {task.unit === "min" ? formatMin(task.target) : `${task.target} ${task.unit}`}</div>
+                        <div style={S.taskSub}>
+                          {task.unit === "min" ? formatMin(displayVal) : displayVal} / {task.unit === "min" ? formatMin(task.target) : `${task.target} ${task.unit}`}
+                        </div>
                       </div>
                     </div>
                     <div>
@@ -2110,8 +2144,8 @@ export default function DenizHQ() {
                         <button style={{ ...S.startBtn, ...(status==="now"?{borderColor:"rgba(255,255,255,0.3)"}:{}) }} onClick={() => { setTimerTask(task); setTimerSecs(15*60); setTimerRunning(false); setTimerOpen(true); }}>Start</button>
                       ) : (
                         <div style={S.taskBtns}>
-                          <button style={S.qBtn} onClick={() => updateTask(tid, v + (task.unit==="reps"?25:1))}>+{task.unit==="reps"?25:1}</button>
-                          <button style={S.qBtnDone} onClick={() => updateTask(tid, task.target)}>{I.check}</button>
+                          <button style={S.qBtn} onClick={() => updateTask(task.id, v + increment)}>+{increment}</button>
+                          <button style={S.qBtnDone} onClick={() => updateTask(task.id, task.target)}>{I.check}</button>
                         </div>
                       )}
                     </div>
@@ -2415,12 +2449,12 @@ export default function DenizHQ() {
               <div style={{ fontSize: 13, color: "rgba(255,255,255,0.3)", textAlign: "center", padding: "24px 0" }}>No trackable tasks in today&apos;s schedule</div>
             )}
             {todayTasks.map(t => {
-              const effectiveTarget = customTargets[t.id] ?? t.target;
-              const v = td[t.id]||0, done = v>=effectiveTarget, streak = taskStreaks[t.id]||0;
+              const v = td[t.id]||0, done = v>=t.target, streak = taskStreaks[t.id]||0;
+              const isDefaultTask = DEFAULT_TASKS.some(d => d.id === t.id);
               return (
                 <div key={t.id} style={{ ...S.checkRow, ...(done?S.checkDone:{}) }}>
                   <div style={S.checkLeft}>
-                    <div style={{ ...S.checkBox, ...(done?S.checkBoxDone:{}) }} onClick={() => updateTask(t.id, done?0:effectiveTarget)}>{done && I.check}</div>
+                    <div style={{ ...S.checkBox, ...(done?S.checkBoxDone:{}) }} onClick={() => updateTask(t.id, done?0:t.target)}>{done && I.check}</div>
                     <div>
                       <div style={{ ...S.checkLabel, gap:8 }}>
                         {t.icon} {t.label}
@@ -2428,9 +2462,13 @@ export default function DenizHQ() {
                       </div>
                       <div style={{ ...S.checkTarget, display:"flex", alignItems:"center", gap:6 }}>
                         Target:
-                        <input type="number" value={effectiveTarget} min="1"
-                          onChange={e => { const n = Number(e.target.value); if (n > 0) saveCustomTargets({ ...customTargets, [t.id]: n }); }}
-                          style={{ width:52, padding:"1px 4px", background:"rgba(255,255,255,0.06)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:4, color:"rgba(255,255,255,0.7)", fontSize:11, outline:"none", textAlign:"center" }} />
+                        {isDefaultTask ? (
+                          <input type="number" value={customTargets[t.id] ?? t.target} min="1"
+                            onChange={e => { const n = Number(e.target.value); if (n > 0) saveCustomTargets({ ...customTargets, [t.id]: n }); }}
+                            style={{ width:52, padding:"1px 4px", background:"rgba(255,255,255,0.06)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:4, color:"rgba(255,255,255,0.7)", fontSize:11, outline:"none", textAlign:"center" }} />
+                        ) : (
+                          <span style={{ fontSize:11, color:"rgba(255,255,255,0.5)", fontWeight:700 }}>{t.target}</span>
+                        )}
                         {t.unit}
                       </div>
                     </div>
