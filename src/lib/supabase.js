@@ -89,7 +89,7 @@ export async function loadData() {
     if (reviewRes.data?.length > 0) {
       dailyReviews = {};
       for (const row of reviewRes.data) {
-        dailyReviews[row.date] = { rating: row.rating, priorityTomorrow: row.priority_tomorrow };
+        dailyReviews[row.date] = { rating: row.rating, priorityTomorrow: row.priority_tomorrow, summary: row.summary || "" };
       }
     }
 
@@ -186,11 +186,11 @@ export async function saveTaskDuration(date, taskId, durationMinutes) {
 }
 
 // ─── DAILY REVIEWS ────────────────────────────────────────────────────────────
-export async function saveDailyReview(date, rating, priorityTomorrow) {
+export async function saveDailyReview(date, rating, priorityTomorrow, summary = "") {
   const deviceId = getDeviceId();
   try {
     const { error } = await supabase.from("daily_reviews").upsert(
-      { device_id: deviceId, date, rating, priority_tomorrow: priorityTomorrow, reviewed_at: new Date().toISOString() },
+      { device_id: deviceId, date, rating, priority_tomorrow: priorityTomorrow, summary: summary || "", reviewed_at: new Date().toISOString() },
       { onConflict: "device_id,date" }
     );
     if (error) console.warn("[Deniz HQ] saveDailyReview:", error.message);

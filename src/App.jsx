@@ -99,15 +99,15 @@ const SCHED_TASK_MAP = {
   "Record Content":"content","Edit Content":"content",
 };
 
-function getTodaysTasks(schedule) {
+function getTodaysTasks(schedule, tasksById = TASK_BY_ID) {
   const seen = new Set();
   const result = [];
   for (const s of schedule) {
     const tid = s.taskId || SCHED_TASK_MAP[s.label];
     if (!tid || seen.has(tid)) continue;
     seen.add(tid);
-    const base = TASK_BY_ID[tid];
-    if (base) result.push(base);
+    const base = tasksById[tid];
+    if (base) result.push(s.target != null ? { ...base, target: s.target, unit: s.unit || base.unit } : base);
   }
   return result;
 }
@@ -867,9 +867,10 @@ function MorningBriefing({ lines, onDismiss }) {
 }
 
 // ─── EndOfDayReview ───────────────────────────────────────────────────────────
-function EndOfDayReview({ data, today, workLogs, todayTasks, onSave, onClose }) {
+function EndOfDayReview({ data, today, workLogs, todayTasks, existingSummary, onSave, onClose }) {
   const [rating, setRating] = useState(0);
   const [priority, setPriority] = useState("");
+  const [summary, setSummary] = useState(existingSummary || "");
 
   const td = data?.days?.[today] || {};
   const todayWL = workLogs?.[today] || [];
@@ -896,21 +897,14 @@ function EndOfDayReview({ data, today, workLogs, todayTasks, onSave, onClose }) 
   const monthRevenue = computeMonthlyRevenue(data?.callLogs || {});
 
   const commentary = (() => {
-    const igVal = td.ig_outreach || 0;
-    const ceoMins = todayWL.filter(l => l.taskId === "ceo_work").reduce((s, l) => s + l.minutes, 0);
+    const missedTasks = todayTasks.filter(t => (td[t.id] || 0) < t.target).map(t => t.label);
     if (pct === 1) return closedCalls.length > 0
-      ? `Perfect execution — ${completedCount}/${todayTasks.length} tasks done. €${callRevenue.toLocaleString()} closed today. This is how empires are built.`
-      : `Perfect execution — ${completedCount}/${todayTasks.length} tasks done. Now push for the close tomorrow.`;
-    if (pct >= 0.7) {
-      if (ceoMins === 0) return `${completedCount}/${todayTasks.length} tasks done, but 0 minutes of CEO work. If you're not doing strategy, who is running your business?`;
-      return `${completedCount}/${todayTasks.length} tasks done. ${todayTasks.length - completedCount} left on the table. Good isn't great — close that gap tomorrow.`;
-    }
-    if (pct >= 0.5) {
-      if (igVal < 20) return `${igVal} DMs today. At this rate your pipeline runs dry. 50 DMs/day is not optional.`;
-      return `Half your day was wasted. ${completedCount}/${todayTasks.length} tasks done. What mattered more than building your business?`;
-    }
-    if (ceoMins === 0 && igVal < 10) return `0 CEO work. ${igVal} DMs. ${calls.length} calls. This is not how you build a €10k/month business. Reset tomorrow — completely.`;
-    return `${completedCount}/${todayTasks.length} tasks completed. Honestly — this was a bad day. The only thing that matters now is that tomorrow is different.`;
+      ? `Perfect execution — all ${completedCount} tasks done. €${callRevenue.toLocaleString()} closed today. This is how empires are built.`
+      : `Perfect execution — all ${completedCount} tasks done. Consistent days like this build great companies.`;
+    if (pct >= 0.7) return `${completedCount}/${todayTasks.length} tasks done. Still missed: ${missedTasks.join(", ")}. Good isn't great — close that gap tomorrow.`;
+    if (pct >= 0.5) return `Half your schedule was missed. ${completedCount}/${todayTasks.length} tasks done. ${missedTasks.join(", ")} left on the table. Fix this tomorrow.`;
+    if (pct > 0) return `Only ${completedCount}/${todayTasks.length} tasks completed. Missed: ${missedTasks.join(", ")}. This was a bad day. What needs to change tomorrow?`;
+    return `0/${todayTasks.length} tasks completed today. This is not how you build a business. Reset completely — tomorrow is a fresh start.`;
   })();
 
   const dn = new Date(today + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
@@ -1001,6 +995,16 @@ function EndOfDayReview({ data, today, workLogs, todayTasks, onSave, onClose }) 
             {commentary}
           </div>
 
+          {/* Today's Summary */}
+          <div style={{ fontSize: 12, color: "rgba(255,255,255,0.4)", marginBottom: 8, textTransform: "uppercase", letterSpacing: 1 }}>Today&apos;s Summary</div>
+          <textarea
+            placeholder="What did you accomplish today?"
+            value={summary}
+            onChange={e => setSummary(e.target.value)}
+            rows={3}
+            style={{ width: "100%", padding: "10px 12px", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, color: "#fff", fontSize: 13, outline: "none", boxSizing: "border-box", marginBottom: 20, resize: "vertical", fontFamily: "inherit", lineHeight: 1.5 }}
+          />
+
           {/* Rating */}
           <div style={{ fontSize: 12, color: "rgba(255,255,255,0.4)", marginBottom: 10, textTransform: "uppercase", letterSpacing: 1 }}>Rate your day</div>
           <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
@@ -1017,7 +1021,7 @@ function EndOfDayReview({ data, today, workLogs, todayTasks, onSave, onClose }) 
           <div style={{ fontSize: 12, color: "rgba(255,255,255,0.4)", marginBottom: 8, textTransform: "uppercase", letterSpacing: 1 }}>Your #1 priority tomorrow</div>
           <input placeholder="e.g. Close the Funnels client deal" value={priority} onChange={e => setPriority(e.target.value)}
             style={{ width: "100%", padding: "10px 12px", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, color: "#fff", fontSize: 13, outline: "none", boxSizing: "border-box", marginBottom: 16 }} />
-          <button onClick={() => onSave(rating, priority)} style={{ width: "100%", padding: "13px", background: "#fff", border: "none", borderRadius: 12, color: "#0A0A0F", fontSize: 14, fontWeight: 800, cursor: "pointer" }}>
+          <button onClick={() => onSave(rating, priority, summary)} style={{ width: "100%", padding: "13px", background: "#fff", border: "none", borderRadius: 12, color: "#0A0A0F", fontSize: 14, fontWeight: 800, cursor: "pointer" }}>
             Save &amp; close
           </button>
         </div>
@@ -1059,13 +1063,13 @@ const TASK_PRESETS = [
 function ScheduleEditor({ draft, onChange, onSave, onCancel }) {
   const [adding, setAdding] = useState(false);
   const [editIdx, setEditIdx] = useState(null);
-  const [form, setForm] = useState({ time: "09:00", label: "", dur: 60, taskId: null, category: "" });
+  const [form, setForm] = useState({ time: "09:00", label: "", dur: 60, taskId: null, category: "", customType: "timer", target: null, unit: "" });
   const [showPresets, setShowPresets] = useState(false);
 
   const sorted = [...draft].sort((a, b) => a.time.localeCompare(b.time));
 
   function openAdd() {
-    setForm({ time: "09:00", label: "", dur: 60, taskId: null, category: "" });
+    setForm({ time: "09:00", label: "", dur: 60, taskId: null, category: "", customType: "timer", target: null, unit: "" });
     setAdding(true);
     setEditIdx(null);
     setShowPresets(true);
@@ -1073,29 +1077,48 @@ function ScheduleEditor({ draft, onChange, onSave, onCancel }) {
 
   function openEdit(idx) {
     const s = sorted[idx];
-    setForm({ time: s.time, label: s.label, dur: s.dur, taskId: s.taskId || null, category: s.category || "" });
+    const task = s.taskId ? TASK_BY_ID[s.taskId] : null;
+    const isCounter = task ? task.unit !== "min" : s.customType === "counter";
+    setForm({
+      time: s.time, label: s.label, dur: s.dur, taskId: s.taskId || null,
+      category: s.category || "",
+      customType: s.customType || (isCounter ? "counter" : "timer"),
+      target: s.target ?? (isCounter && task ? task.target : null),
+      unit: s.unit || task?.unit || "",
+    });
     setEditIdx(idx);
     setAdding(false);
     setShowPresets(false);
   }
 
   function applyPreset(preset) {
-    setForm(f => ({ ...f, label: preset.label, dur: preset.dur, taskId: preset.taskId, category: preset.taskId ? "" : f.category }));
+    const task = preset.taskId ? TASK_BY_ID[preset.taskId] : null;
+    const isCounter = task?.unit !== "min";
+    setForm(f => ({
+      ...f, label: preset.label, dur: preset.dur, taskId: preset.taskId,
+      category: preset.taskId ? "" : f.category,
+      customType: isCounter ? "counter" : "timer",
+      target: isCounter ? (task?.target ?? null) : null,
+      unit: isCounter ? (task?.unit ?? "") : "",
+    }));
     setShowPresets(false);
   }
 
   function saveBlock() {
     if (!form.label.trim() || !form.time) return;
+    const task = form.taskId ? TASK_BY_ID[form.taskId] : null;
+    const isCounter = task ? task.unit !== "min" : form.customType === "counter";
     const block = {
       time: form.time, label: form.label.trim(), dur: Number(form.dur) || 60,
       ...(form.taskId ? { taskId: form.taskId } : {}),
+      ...(isCounter && form.target != null ? { target: Number(form.target), unit: form.unit || task?.unit || "" } : {}),
+      ...(!form.taskId && form.customType === "counter" ? { customType: "counter" } : {}),
       ...(form.category && !form.taskId ? { category: form.category } : {}),
     };
     let next;
     if (adding) {
       next = [...draft, block];
     } else {
-      // find original block index in draft
       const originalLabel = sorted[editIdx].label;
       const originalTime = sorted[editIdx].time;
       next = draft.map(d => d.time === originalTime && d.label === originalLabel ? block : d);
@@ -1112,24 +1135,34 @@ function ScheduleEditor({ draft, onChange, onSave, onCancel }) {
   }
 
   const isFormOpen = adding || editIdx !== null;
+  const isCounterForm = form.taskId ? TASK_BY_ID[form.taskId]?.unit !== "min" : form.customType === "counter";
 
   return (
     <div>
       {/* Block list */}
-      {sorted.map((s, i) => (
-        <div key={i} onClick={() => editIdx === i ? setEditIdx(null) : openEdit(i)}
-          style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 12px", marginBottom:6, borderRadius:10,
-            background: editIdx===i ? "rgba(255,255,255,0.07)" : "rgba(255,255,255,0.03)",
-            border: `1px solid ${editIdx===i?"rgba(255,255,255,0.12)":"rgba(255,255,255,0.05)"}`, cursor:"pointer" }}>
-          <div style={{ fontSize:12, fontWeight:700, color:"rgba(255,255,255,0.5)", width:40, flexShrink:0 }}>{s.time}</div>
-          <div style={{ flex:1 }}>
-            <div style={{ fontSize:13, fontWeight:600, color:"#fff" }}>{s.label}</div>
-            {s.taskId && <div style={{ fontSize:10, color:"rgba(255,255,255,0.3)", marginTop:1 }}>Tracks: {s.taskId}</div>}
-            {!s.taskId && s.category && <div style={{ fontSize:10, color:"rgba(255,255,255,0.25)", marginTop:1 }}>{s.category}</div>}
+      {sorted.map((s, i) => {
+        const bTask = s.taskId ? TASK_BY_ID[s.taskId] : null;
+        const bIsCounter = bTask ? bTask.unit !== "min" : s.customType === "counter";
+        const bTarget = s.target ?? bTask?.target;
+        const bUnit = s.unit || bTask?.unit || "";
+        return (
+          <div key={i} onClick={() => editIdx === i ? setEditIdx(null) : openEdit(i)}
+            style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 12px", marginBottom:6, borderRadius:10,
+              background: editIdx===i ? "rgba(255,255,255,0.07)" : "rgba(255,255,255,0.03)",
+              border: `1px solid ${editIdx===i?"rgba(255,255,255,0.12)":"rgba(255,255,255,0.05)"}`, cursor:"pointer" }}>
+            <div style={{ fontSize:12, fontWeight:700, color:"rgba(255,255,255,0.5)", width:40, flexShrink:0 }}>{s.time}</div>
+            <div style={{ flex:1 }}>
+              <div style={{ fontSize:13, fontWeight:600, color:"#fff" }}>{s.label}</div>
+              {bIsCounter && bTarget != null
+                ? <div style={{ fontSize:10, color:"rgba(255,255,255,0.3)", marginTop:1 }}>{bTarget} {bUnit}</div>
+                : (!s.taskId && s.category
+                  ? <div style={{ fontSize:10, color:"rgba(255,255,255,0.25)", marginTop:1 }}>{s.category}</div>
+                  : null)}
+            </div>
+            {!bIsCounter && <div style={{ fontSize:11, color:"rgba(255,255,255,0.3)" }}>{formatTime(s.dur)}</div>}
           </div>
-          <div style={{ fontSize:11, color:"rgba(255,255,255,0.3)" }}>{formatTime(s.dur)}</div>
-        </div>
-      ))}
+        );
+      })}
 
       {/* Inline edit form */}
       {isFormOpen && (
@@ -1140,8 +1173,8 @@ function ScheduleEditor({ draft, onChange, onSave, onCancel }) {
             <div style={{ marginBottom:12 }}>
               <div style={{ fontSize:10, color:"rgba(255,255,255,0.4)", marginBottom:6, fontWeight:700, letterSpacing:1 }}>PICK A BLOCK TYPE</div>
               <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
-                {TASK_PRESETS.map((p, i) => (
-                  <button key={i} onClick={() => applyPreset(p)}
+                {TASK_PRESETS.map((p, pi) => (
+                  <button key={pi} onClick={() => applyPreset(p)}
                     style={{ padding:"5px 10px", borderRadius:16, fontSize:11, fontWeight:600, border:"1px solid rgba(255,255,255,0.1)", background:"rgba(255,255,255,0.04)", color:"rgba(255,255,255,0.7)", cursor:"pointer" }}>
                     {p.label}
                   </button>
@@ -1150,18 +1183,61 @@ function ScheduleEditor({ draft, onChange, onSave, onCancel }) {
             </div>
           )}
 
-          {/* Time + Duration row */}
+          {/* Custom block type picker (timer vs counter) — only for blocks without a linked task */}
+          {!form.taskId && !showPresets && (
+            <div style={{ marginBottom:10 }}>
+              <div style={{ fontSize:10, color:"rgba(255,255,255,0.4)", marginBottom:6, fontWeight:700, letterSpacing:1 }}>TRACKING TYPE</div>
+              <div style={{ display:"flex", gap:6 }}>
+                {[["timer","Timer (duration)"],["counter","Counter (reps/count)"]].map(([type, label]) => (
+                  <button key={type} onClick={() => setForm(f => ({ ...f, customType: type }))}
+                    style={{ flex:1, padding:"7px 0", borderRadius:8, fontSize:11, fontWeight:700, border:"1px solid", cursor:"pointer",
+                      borderColor: form.customType===type ? "rgba(255,255,255,0.4)" : "rgba(255,255,255,0.08)",
+                      background: form.customType===type ? "rgba(255,255,255,0.1)" : "transparent",
+                      color: form.customType===type ? "#fff" : "rgba(255,255,255,0.35)" }}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Time row */}
           <div style={{ display:"flex", gap:8, marginBottom:10 }}>
             <div style={{ flex:1 }}>
               <div style={{ fontSize:10, color:"rgba(255,255,255,0.4)", marginBottom:4 }}>Time</div>
               <input type="time" value={form.time} onChange={e => setForm(f => ({ ...f, time: e.target.value }))}
                 style={{ width:"100%", padding:"8px 10px", background:"rgba(255,255,255,0.06)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:8, color:"#fff", fontSize:14, fontWeight:700, outline:"none", boxSizing:"border-box", colorScheme:"dark" }} />
             </div>
-            <div style={{ flex:1 }}>
-              <div style={{ fontSize:10, color:"rgba(255,255,255,0.4)", marginBottom:4 }}>Duration (min)</div>
-              <input type="number" value={form.dur} onChange={e => setForm(f => ({ ...f, dur: e.target.value }))} min="5" step="5"
-                style={{ width:"100%", padding:"8px 10px", background:"rgba(255,255,255,0.06)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:8, color:"#fff", fontSize:14, fontWeight:700, outline:"none", boxSizing:"border-box" }} />
-            </div>
+            {/* Duration — only for timer tasks */}
+            {!isCounterForm && (
+              <div style={{ flex:1 }}>
+                <div style={{ fontSize:10, color:"rgba(255,255,255,0.4)", marginBottom:4 }}>Duration (min)</div>
+                <input type="number" value={form.dur} onChange={e => setForm(f => ({ ...f, dur: e.target.value }))} min="5" step="5"
+                  style={{ width:"100%", padding:"8px 10px", background:"rgba(255,255,255,0.06)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:8, color:"#fff", fontSize:14, fontWeight:700, outline:"none", boxSizing:"border-box" }} />
+              </div>
+            )}
+            {/* Target + Unit — only for counter tasks */}
+            {isCounterForm && (
+              <>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:10, color:"rgba(255,255,255,0.4)", marginBottom:4 }}>Target</div>
+                  <input type="number" value={form.target ?? ""} onChange={e => setForm(f => ({ ...f, target: e.target.value }))} min="1" placeholder="e.g. 50"
+                    style={{ width:"100%", padding:"8px 10px", background:"rgba(255,255,255,0.06)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:8, color:"#fff", fontSize:14, fontWeight:700, outline:"none", boxSizing:"border-box" }} />
+                </div>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:10, color:"rgba(255,255,255,0.4)", marginBottom:4 }}>Unit</div>
+                  <select value={form.unit} onChange={e => setForm(f => ({ ...f, unit: e.target.value }))}
+                    style={{ width:"100%", padding:"8px 10px", background:"rgba(30,30,40,1)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:8, color:"#fff", fontSize:13, outline:"none", boxSizing:"border-box" }}>
+                    <option value="reps">reps</option>
+                    <option value="sent">sent</option>
+                    <option value="calls">calls</option>
+                    <option value="count">count</option>
+                    <option value="pages">pages</option>
+                    <option value="mins">mins</option>
+                  </select>
+                </div>
+              </>
+            )}
           </div>
 
           {/* Label */}
@@ -1189,18 +1265,20 @@ function ScheduleEditor({ draft, onChange, onSave, onCancel }) {
             </div>
           )}
 
-          {/* Duration quick picks */}
-          <div style={{ display:"flex", gap:6, marginBottom:12 }}>
-            {[30,60,90,120,180].map(m => (
-              <button key={m} onClick={() => setForm(f => ({ ...f, dur: m }))}
-                style={{ flex:1, padding:"5px 0", borderRadius:6, fontSize:10, fontWeight:700, border:"1px solid", cursor:"pointer",
-                  borderColor: Number(form.dur)===m ? "rgba(255,255,255,0.4)" : "rgba(255,255,255,0.08)",
-                  background: Number(form.dur)===m ? "rgba(255,255,255,0.1)" : "transparent",
-                  color: Number(form.dur)===m ? "#fff" : "rgba(255,255,255,0.35)" }}>
-                {m>=60?`${m/60}h`:`${m}m`}
-              </button>
-            ))}
-          </div>
+          {/* Duration quick picks — only for timer tasks */}
+          {!isCounterForm && (
+            <div style={{ display:"flex", gap:6, marginBottom:12 }}>
+              {[30,60,90,120,180].map(m => (
+                <button key={m} onClick={() => setForm(f => ({ ...f, dur: m }))}
+                  style={{ flex:1, padding:"5px 0", borderRadius:6, fontSize:10, fontWeight:700, border:"1px solid", cursor:"pointer",
+                    borderColor: Number(form.dur)===m ? "rgba(255,255,255,0.4)" : "rgba(255,255,255,0.08)",
+                    background: Number(form.dur)===m ? "rgba(255,255,255,0.1)" : "transparent",
+                    color: Number(form.dur)===m ? "#fff" : "rgba(255,255,255,0.35)" }}>
+                  {m>=60?`${m/60}h`:`${m}m`}
+                </button>
+              ))}
+            </div>
+          )}
 
           {/* Buttons */}
           <div style={{ display:"flex", gap:8 }}>
@@ -1461,7 +1539,7 @@ export default function DenizHQ() {
     });
   })();
 
-  const todayTasks = getTodaysTasks(schedule);
+  const todayTasks = getTodaysTasks(schedule, TASKS_BY_ID);
   const todayPriority = dailyReviews?.[prevDay(today)]?.priorityTomorrow || null;
 
   // Keep refs fresh so the notification loop always has current data
@@ -1518,11 +1596,11 @@ export default function DenizHQ() {
   // ── Task update ───────────────────────────────────────────────────────────
   const updateTask = useCallback((id, val) => {
     const newVal = Math.max(0, Number(val) || 0);
-    const taskDef = TASK_BY_ID[id];
+    const taskDef = TASKS_BY_ID[id];
     const prevVal = td[id] || 0;
     const d = { ...data, days: { ...data.days, [today]: { ...td, [id]: newVal } } };
     const sched = getScheduleForDate(today, customSchedules);
-    const tTasks = getTodaysTasks(sched);
+    const tTasks = getTodaysTasks(sched, TASKS_BY_ID);
     const all = tTasks.length > 0 && tTasks.every(t => (d.days[today][t.id] || 0) >= t.target);
     let streakChanged = false;
     if (all && !d.days[today]._done) {
@@ -1663,12 +1741,12 @@ export default function DenizHQ() {
   }, [data, revenue, customSchedules]);
 
   // ── EOD review save ───────────────────────────────────────────────────────
-  const saveEOD = useCallback((rating, priorityTomorrow) => {
-    const updated = { ...dailyReviews, [today]: { rating, priorityTomorrow } };
+  const saveEOD = useCallback((rating, priorityTomorrow, summary) => {
+    const updated = { ...dailyReviews, [today]: { rating, priorityTomorrow, summary } };
     setDailyReviews(updated);
     localStorage.setItem(`deniz-hq-eod-${today}`, "1");
     setShowEOD(false);
-    saveDailyReview(today, rating, priorityTomorrow).catch(console.error);
+    saveDailyReview(today, rating, priorityTomorrow, summary).catch(console.error);
   }, [dailyReviews, today]);
 
   // ── Test notification ─────────────────────────────────────────────────────
@@ -1766,6 +1844,7 @@ export default function DenizHQ() {
           today={today}
           workLogs={workLogs}
           todayTasks={todayTasks}
+          existingSummary={dailyReviews?.[today]?.summary || ""}
           onSave={saveEOD}
           onClose={() => { localStorage.setItem(`deniz-hq-eod-${today}`, "1"); setShowEOD(false); }}
         />
@@ -2186,11 +2265,24 @@ export default function DenizHQ() {
                   })();
                   return calMergedSchedule.map((s, i) => {
                     if (!s._gcalEv) {
+                      const blockTask = s.taskId ? TASK_BY_ID[s.taskId] : null;
+                      const isCounter = blockTask ? blockTask.unit !== "min" : s.customType === "counter";
+                      const blockTarget = s.target ?? blockTask?.target;
+                      const blockUnit = s.unit || blockTask?.unit || "";
                       return (
                         <div key={i} style={S.schedRow}>
                           <div style={S.schedTime}><span>{s.time}</span></div>
                           <div style={S.schedName}>{s.label}</div>
-                          <div style={S.schedDur}>{formatTime(s.dur)}</div>
+                          <div style={{ ...S.schedDur, display:"flex", alignItems:"center", gap:4 }}>
+                            {isCounter && blockTarget != null ? (
+                              <span style={{ fontSize:10, color:"rgba(255,255,255,0.5)", fontWeight:700 }}>{blockTarget} {blockUnit}</span>
+                            ) : (
+                              <>
+                                <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.3)" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                                <span>{formatTime(s.dur)}</span>
+                              </>
+                            )}
+                          </div>
                         </div>
                       );
                     }
@@ -2450,12 +2542,20 @@ export default function DenizHQ() {
                     </div>
                   )}
 
-                  {/* Day rating */}
+                  {/* Day review — summary, rating, priority */}
                   {sdReview && (
-                    <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:8 }}>
-                      {[1,2,3,4,5].map(s => <svg key={s} width="16" height="16" viewBox="0 0 24 24" fill={s<=sdReview.rating?"#FFD700":"none"} stroke={s<=sdReview.rating?"#FFD700":"rgba(255,255,255,0.2)"} strokeWidth="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>)}
-                      {sdReview.priorityTomorrow && <span style={{ fontSize:11, color:"rgba(255,255,255,0.35)", marginLeft:6 }}>→ {sdReview.priorityTomorrow}</span>}
-                    </div>
+                    <>
+                      {sdReview.summary && (
+                        <div style={{ marginBottom:10, padding:"10px 12px", background:"rgba(255,255,255,0.03)", borderRadius:8, border:"1px solid rgba(255,255,255,0.05)" }}>
+                          <div style={{ fontSize:10, fontWeight:700, color:"rgba(255,255,255,0.3)", letterSpacing:1, marginBottom:4 }}>SUMMARY</div>
+                          <div style={{ fontSize:13, color:"rgba(255,255,255,0.7)", lineHeight:1.5 }}>{sdReview.summary}</div>
+                        </div>
+                      )}
+                      <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:8, flexWrap:"wrap" }}>
+                        {[1,2,3,4,5].map(s => <svg key={s} width="16" height="16" viewBox="0 0 24 24" fill={s<=sdReview.rating?"#FFD700":"none"} stroke={s<=sdReview.rating?"#FFD700":"rgba(255,255,255,0.2)"} strokeWidth="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>)}
+                        {sdReview.priorityTomorrow && <span style={{ fontSize:11, color:"rgba(255,255,255,0.35)", marginLeft:6 }}>→ {sdReview.priorityTomorrow}</span>}
+                      </div>
+                    </>
                   )}
 
                   {/* Scheduled vs actual — only for tasks IN that day's schedule */}
