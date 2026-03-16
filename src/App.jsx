@@ -124,7 +124,20 @@ function getTodaysTasks(schedule, tasksById = TASK_BY_ID) {
         label: s.label,
         target: Number(s.target),
         unit: s.unit || "reps",
-        cat: "custom",
+        cat: s.category || "custom",
+        icon: null,
+      });
+    } else if (s.customType === "timer") {
+      // Custom timer block — tracked via work logs like any timer task
+      const timerBlockId = s.blockId || ("timer_" + s.label.toLowerCase().replace(/[^a-z0-9]+/g, "_"));
+      if (seen.has(timerBlockId)) continue;
+      seen.add(timerBlockId);
+      result.push({
+        id: timerBlockId,
+        label: s.label,
+        target: s.dur,       // duration in minutes is the target
+        unit: "min",
+        cat: s.category || "Other",
         icon: null,
       });
     }
@@ -1130,15 +1143,16 @@ function ScheduleEditor({ draft, onChange, onSave, onCancel }) {
     if (!form.label.trim() || !form.time) return;
     const task = form.taskId ? TASK_BY_ID[form.taskId] : null;
     const isCounter = task ? task.unit !== "min" : form.customType === "counter";
-    // For custom counter blocks, keep existing blockId or generate a stable one from label
-    const blockId = !form.taskId && isCounter
-      ? (form.blockId || ("block_" + form.label.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_")))
+    // All custom blocks (no taskId) get a stable blockId so progress isn't lost when label changes
+    const prefix = isCounter ? "block_" : "timer_";
+    const customBlockId = !form.taskId
+      ? (form.blockId || (prefix + form.label.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_")))
       : undefined;
     const block = {
       time: form.time, label: form.label.trim(), dur: Number(form.dur) || 60,
       ...(form.taskId ? { taskId: form.taskId } : {}),
       ...(isCounter && form.target != null ? { target: Number(form.target), unit: form.unit || task?.unit || "" } : {}),
-      ...(!form.taskId && isCounter && blockId ? { customType: "counter", blockId } : {}),
+      ...(!form.taskId ? { customType: isCounter ? "counter" : "timer", blockId: customBlockId } : {}),
       ...(form.category && !form.taskId ? { category: form.category } : {}),
     };
     let next;
@@ -1403,6 +1417,7 @@ export default function DenizHQ() {
   const dataRef              = useRef(null);
   const customSchedulesRef   = useRef({});
   const todayPriorityRef     = useRef(null);
+  const todayTasksRef        = useRef([]); // always current todayTasks for use inside callbacks
 
   const today = getToday();
 
@@ -1572,6 +1587,7 @@ export default function DenizHQ() {
   useEffect(() => { dataRef.current = data; }, [data]);
   useEffect(() => { customSchedulesRef.current = customSchedules; }, [customSchedules]);
   useEffect(() => { todayPriorityRef.current = todayPriority; }, [todayPriority]);
+  useEffect(() => { todayTasksRef.current = todayTasks; }, [todayTasks]);
 
   // ── Direct notification loop — fires immediately + every 30 min ───────────
   useEffect(() => {
@@ -1622,7 +1638,8 @@ export default function DenizHQ() {
   // ── Task update ───────────────────────────────────────────────────────────
   const updateTask = useCallback((id, val) => {
     const newVal = Math.max(0, Number(val) || 0);
-    const taskDef = TASKS_BY_ID[id];
+    // Use schedule-derived task first (has block-level targets + custom tasks), fall back to TASKS_BY_ID
+    const taskDef = todayTasksRef.current.find(t => t.id === id) || TASKS_BY_ID[id];
     const prevVal = td[id] || 0;
     const d = { ...data, days: { ...data.days, [today]: { ...td, [id]: newVal } } };
     const sched = getScheduleForDate(today, customSchedules);
@@ -1649,13 +1666,17 @@ export default function DenizHQ() {
   // ── Work log (from focus timer) ───────────────────────────────────────────
   const logWork = useCallback((taskId, minutes, description) => {
     if (!minutes) return;
-    const entry = { taskId, minutes, description, timestamp: new Date().toISOString(), category: getTaskCategory(taskId, taskId) };
+    // For unknown task IDs (custom timer blocks), use the category from the schedule task
+    const knownCat = getTaskCategory(taskId, taskId);
+    const schedTask = todayTasksRef.current.find(t => t.id === taskId);
+    const category = knownCat !== "Other" ? knownCat : (schedTask?.cat || "Other");
+    const entry = { taskId, minutes, description, timestamp: new Date().toISOString(), category };
     const updated = { ...workLogs, [today]: [...(workLogs[today] || []), entry] };
     setWorkLogs(updated);
     // Also update task value (sum all logged minutes)
     const total = (updated[today] || []).filter(l => l.taskId === taskId).reduce((s, l) => s + l.minutes, 0);
     updateTask(taskId, total);
-    saveWorkLog(today, taskId, minutes, description, getTaskCategory(taskId, taskId)).catch(console.error);
+    saveWorkLog(today, taskId, minutes, description, category).catch(console.error);
   }, [workLogs, today, updateTask]);
 
   // ── Extra work log ────────────────────────────────────────────────────────
