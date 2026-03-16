@@ -33,9 +33,6 @@ export function getNotificationPayload(schedule, taskData, priority = null) {
 
   const TARGETS = { ig_outreach:50, upwork:5, pushups:200, situps:200, client_work:120, ceo_work:120, content:60, sales_calls:2 };
 
-  // Before 7am or after 22:00 — silence
-  if (hour < 7 || hour >= 22) return null;
-
   // TYPE 0 — priority reminder at ~14:00
   if (priority && nowMin >= 13*60+30 && nowMin <= 14*60+30) {
     return { title: "Priority check", body: `You said: "${priority}". Have you started?` };

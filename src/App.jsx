@@ -1032,42 +1032,175 @@ function WhatShouldIDoModal({ message, onClose }) {
 }
 
 // ─── ScheduleEditor ───────────────────────────────────────────────────────────
+const TASK_PRESETS = [
+  { label: "Morning Workout", dur: 60, taskId: "pushups" },
+  { label: "Evening Workout", dur: 30, taskId: "situps" },
+  { label: "Instagram Outreach", dur: 90, taskId: "ig_outreach" },
+  { label: "Upwork Proposals", dur: 60, taskId: "upwork" },
+  { label: "Client Delivery", dur: 120, taskId: "client_work" },
+  { label: "CEO Strategy", dur: 120, taskId: "ceo_work" },
+  { label: "Content Creation", dur: 60, taskId: "content" },
+  { label: "Class", dur: 360, taskId: null },
+  { label: "Deep Work", dur: 90, taskId: null },
+  { label: "Break", dur: 30, taskId: null },
+  { label: "Custom", dur: 60, taskId: null },
+];
+
 function ScheduleEditor({ draft, onChange, onSave, onCancel }) {
-  function updateBlock(i, field, val) { onChange(draft.map((b, idx) => idx === i ? { ...b, [field]: val } : b)); }
-  function addBlock() { onChange([...draft, { time: "09:00", label: "New Block", dur: 60, taskType: "display" }]); }
-  function removeBlock(i) { onChange(draft.filter((_, idx) => idx !== i)); }
+  const [adding, setAdding] = useState(false);
+  const [editIdx, setEditIdx] = useState(null);
+  const [form, setForm] = useState({ time: "09:00", label: "", dur: 60, taskId: null });
+  const [showPresets, setShowPresets] = useState(false);
+
+  const sorted = [...draft].sort((a, b) => a.time.localeCompare(b.time));
+
+  function openAdd() {
+    setForm({ time: "09:00", label: "", dur: 60, taskId: null });
+    setAdding(true);
+    setEditIdx(null);
+    setShowPresets(true);
+  }
+
+  function openEdit(idx) {
+    const s = sorted[idx];
+    setForm({ time: s.time, label: s.label, dur: s.dur, taskId: s.taskId || null });
+    setEditIdx(idx);
+    setAdding(false);
+    setShowPresets(false);
+  }
+
+  function applyPreset(preset) {
+    setForm(f => ({ ...f, label: preset.label, dur: preset.dur, taskId: preset.taskId }));
+    setShowPresets(false);
+  }
+
+  function saveBlock() {
+    if (!form.label.trim() || !form.time) return;
+    const block = { time: form.time, label: form.label.trim(), dur: Number(form.dur) || 60, ...(form.taskId ? { taskId: form.taskId } : {}) };
+    let next;
+    if (adding) {
+      next = [...draft, block];
+    } else {
+      // find original block index in draft
+      const originalLabel = sorted[editIdx].label;
+      const originalTime = sorted[editIdx].time;
+      next = draft.map(d => d.time === originalTime && d.label === originalLabel ? block : d);
+    }
+    onChange(next.sort((a, b) => a.time.localeCompare(b.time)));
+    setAdding(false);
+    setEditIdx(null);
+  }
+
+  function removeBlock(idx) {
+    const s = sorted[idx];
+    onChange(draft.filter(d => !(d.time === s.time && d.label === s.label)));
+    setEditIdx(null);
+  }
+
+  const isFormOpen = adding || editIdx !== null;
+
   return (
-    <div style={{ marginTop: 12 }}>
-      {draft.map((b, i) => (
-        <div key={i} style={{ background: "rgba(255,255,255,0.03)", borderRadius: 10, padding: "12px", marginBottom: 8, border: "1px solid rgba(255,255,255,0.06)" }}>
-          <div style={{ display: "flex", gap: 6, marginBottom: 8, alignItems: "center" }}>
-            <input value={b.time} onChange={e => updateBlock(i, "time", e.target.value)} style={S.editInput} placeholder="09:00" />
-            <input value={b.label} onChange={e => updateBlock(i, "label", e.target.value)} style={{ ...S.editInput, flex: 1 }} placeholder="Block name" />
-            <button onClick={() => removeBlock(i)} style={S.iconBtn}>{I.x}</button>
+    <div>
+      {/* Block list */}
+      {sorted.map((s, i) => (
+        <div key={i} onClick={() => editIdx === i ? setEditIdx(null) : openEdit(i)}
+          style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 12px", marginBottom:6, borderRadius:10,
+            background: editIdx===i ? "rgba(255,255,255,0.07)" : "rgba(255,255,255,0.03)",
+            border: `1px solid ${editIdx===i?"rgba(255,255,255,0.12)":"rgba(255,255,255,0.05)"}`, cursor:"pointer" }}>
+          <div style={{ fontSize:12, fontWeight:700, color:"rgba(255,255,255,0.5)", width:40, flexShrink:0 }}>{s.time}</div>
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:13, fontWeight:600, color:"#fff" }}>{s.label}</div>
+            {s.taskId && <div style={{ fontSize:10, color:"rgba(255,255,255,0.3)", marginTop:1 }}>Tracks: {s.taskId}</div>}
           </div>
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <input type="number" value={b.dur} onChange={e => updateBlock(i, "dur", Number(e.target.value))} style={{ ...S.editInput, width: 70 }} placeholder="60" />
-            <span style={{ fontSize: 11, color: "rgba(255,255,255,0.3)" }}>min</span>
-            <select value={b.taskType || "display"} onChange={e => updateBlock(i, "taskType", e.target.value)} style={{ ...S.editInput, flex: 1, cursor: "pointer" }}>
-              <option value="display">Display only</option>
-              <option value="timer">Timer task</option>
-              <option value="counter">Counter task</option>
-            </select>
-          </div>
-          {(b.taskType === "timer" || b.taskType === "counter") && (
-            <div style={{ marginTop: 8 }}>
-              <select value={b.taskId || ""} onChange={e => updateBlock(i, "taskId", e.target.value)} style={{ ...S.editInput, width: "100%", cursor: "pointer" }}>
-                <option value="">— Link to task —</option>
-                {DEFAULT_TASKS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
-              </select>
-            </div>
-          )}
+          <div style={{ fontSize:11, color:"rgba(255,255,255,0.3)" }}>{formatTime(s.dur)}</div>
         </div>
       ))}
-      <button onClick={addBlock} style={S.addBlockBtn}>{I.plus} <span style={{ marginLeft: 6 }}>Add Block</span></button>
-      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-        <button onClick={onSave} style={S.saveBtn}>Save Schedule</button>
-        <button onClick={onCancel} style={S.cancelBtn}>Cancel</button>
+
+      {/* Inline edit form */}
+      {isFormOpen && (
+        <div style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:12, padding:"14px", marginBottom:10, marginTop:6 }}>
+
+          {/* Preset picker */}
+          {showPresets && (
+            <div style={{ marginBottom:12 }}>
+              <div style={{ fontSize:10, color:"rgba(255,255,255,0.4)", marginBottom:6, fontWeight:700, letterSpacing:1 }}>PICK A BLOCK TYPE</div>
+              <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+                {TASK_PRESETS.map((p, i) => (
+                  <button key={i} onClick={() => applyPreset(p)}
+                    style={{ padding:"5px 10px", borderRadius:16, fontSize:11, fontWeight:600, border:"1px solid rgba(255,255,255,0.1)", background:"rgba(255,255,255,0.04)", color:"rgba(255,255,255,0.7)", cursor:"pointer" }}>
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Time + Duration row */}
+          <div style={{ display:"flex", gap:8, marginBottom:10 }}>
+            <div style={{ flex:1 }}>
+              <div style={{ fontSize:10, color:"rgba(255,255,255,0.4)", marginBottom:4 }}>Time</div>
+              <input type="time" value={form.time} onChange={e => setForm(f => ({ ...f, time: e.target.value }))}
+                style={{ width:"100%", padding:"8px 10px", background:"rgba(255,255,255,0.06)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:8, color:"#fff", fontSize:14, fontWeight:700, outline:"none", boxSizing:"border-box", colorScheme:"dark" }} />
+            </div>
+            <div style={{ flex:1 }}>
+              <div style={{ fontSize:10, color:"rgba(255,255,255,0.4)", marginBottom:4 }}>Duration (min)</div>
+              <input type="number" value={form.dur} onChange={e => setForm(f => ({ ...f, dur: e.target.value }))} min="5" step="5"
+                style={{ width:"100%", padding:"8px 10px", background:"rgba(255,255,255,0.06)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:8, color:"#fff", fontSize:14, fontWeight:700, outline:"none", boxSizing:"border-box" }} />
+            </div>
+          </div>
+
+          {/* Label */}
+          <div style={{ marginBottom:10 }}>
+            <div style={{ fontSize:10, color:"rgba(255,255,255,0.4)", marginBottom:4 }}>Label</div>
+            <input value={form.label} onChange={e => setForm(f => ({ ...f, label: e.target.value }))} placeholder="Block name..."
+              style={{ width:"100%", padding:"8px 10px", background:"rgba(255,255,255,0.06)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:8, color:"#fff", fontSize:13, outline:"none", boxSizing:"border-box" }} />
+          </div>
+
+          {/* Duration quick picks */}
+          <div style={{ display:"flex", gap:6, marginBottom:12 }}>
+            {[30,60,90,120,180].map(m => (
+              <button key={m} onClick={() => setForm(f => ({ ...f, dur: m }))}
+                style={{ flex:1, padding:"5px 0", borderRadius:6, fontSize:10, fontWeight:700, border:"1px solid", cursor:"pointer",
+                  borderColor: Number(form.dur)===m ? "rgba(255,255,255,0.4)" : "rgba(255,255,255,0.08)",
+                  background: Number(form.dur)===m ? "rgba(255,255,255,0.1)" : "transparent",
+                  color: Number(form.dur)===m ? "#fff" : "rgba(255,255,255,0.35)" }}>
+                {m>=60?`${m/60}h`:`${m}m`}
+              </button>
+            ))}
+          </div>
+
+          {/* Buttons */}
+          <div style={{ display:"flex", gap:8 }}>
+            <button onClick={saveBlock} style={{ flex:1, padding:"9px", borderRadius:8, background:"rgba(255,255,255,0.1)", border:"1px solid rgba(255,255,255,0.15)", color:"#fff", fontSize:13, fontWeight:700, cursor:"pointer" }}>
+              {adding ? "Add Block" : "Update"}
+            </button>
+            {!adding && (
+              <button onClick={() => removeBlock(editIdx)} style={{ padding:"9px 14px", borderRadius:8, background:"rgba(239,68,68,0.08)", border:"1px solid rgba(239,68,68,0.15)", color:"rgba(239,68,68,0.7)", fontSize:12, fontWeight:600, cursor:"pointer" }}>
+                Remove
+              </button>
+            )}
+            <button onClick={() => { setAdding(false); setEditIdx(null); }} style={{ padding:"9px 14px", borderRadius:8, background:"transparent", border:"1px solid rgba(255,255,255,0.06)", color:"rgba(255,255,255,0.35)", fontSize:12, cursor:"pointer" }}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Add block button */}
+      {!isFormOpen && (
+        <button onClick={openAdd} style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:6, width:"100%", padding:"10px", borderRadius:10, background:"rgba(255,255,255,0.03)", border:"1px dashed rgba(255,255,255,0.1)", color:"rgba(255,255,255,0.4)", fontSize:12, fontWeight:600, cursor:"pointer", marginTop:4 }}>
+          + Add Block
+        </button>
+      )}
+
+      {/* Save / Cancel */}
+      <div style={{ display:"flex", gap:8, marginTop:14 }}>
+        <button onClick={onSave} style={{ flex:1, padding:"12px", borderRadius:10, background:"rgba(255,255,255,0.1)", border:"1px solid rgba(255,255,255,0.15)", color:"#fff", fontSize:14, fontWeight:800, cursor:"pointer" }}>
+          Save Schedule
+        </button>
+        <button onClick={onCancel} style={{ padding:"12px 16px", borderRadius:10, background:"transparent", border:"1px solid rgba(255,255,255,0.06)", color:"rgba(255,255,255,0.4)", fontSize:13, cursor:"pointer" }}>
+          Cancel
+        </button>
       </div>
     </div>
   );
@@ -1296,26 +1429,30 @@ export default function DenizHQ() {
   useEffect(() => {
     if (!loaded) return;
 
-    function fire() {
+    async function fire() {
       if (!("Notification" in window) || Notification.permission !== "granted") return;
-      const h = new Date().getHours();
-      if (h < 7 || h >= 22) return;
       const sched = getScheduleForDate(today, customSchedulesRef.current);
       const taskData = dataRef.current?.days?.[today] || {};
       const payload = getNotificationPayload(sched, taskData, todayPriorityRef.current);
-      if (!payload) return; // outside hours or nothing to say
-      const { title, body } = payload;
+      const { title, body } = payload || { title: "Deniz HQ", body: "Stay disciplined. Execute." };
       try {
-        new Notification(title, {
-          body, icon: NOTIF_ICON, badge: NOTIF_ICON,
-          vibrate: [200, 100, 200], tag: "deniz-hq-" + Date.now(), requireInteraction: true,
+        const reg = await navigator.serviceWorker.ready;
+        await reg.showNotification(title, {
+          body,
+          icon: NOTIF_ICON,
+          badge: NOTIF_ICON,
+          vibrate: [200, 100, 200],
+          tag: "deniz-hq",
+          renotify: true,
+          requireInteraction: false,
+          data: { url: "/" },
         });
-      } catch (e) { console.warn("[Deniz HQ] Notification error:", e); }
-      // SW backup for background
-      scheduleAggressiveNotifications(sched, taskData, todayPriorityRef.current).catch(console.warn);
+      } catch (e) {
+        console.warn("[Notif] showNotification failed:", e);
+      }
     }
 
-    fire(); // immediate
+    fire(); // no await needed, it's async
     // Then at every :00 / :30 clock mark
     const now = new Date();
     const minsToSlot = 30 - (now.getMinutes() % 30);
@@ -1323,7 +1460,7 @@ export default function DenizHQ() {
     let intervalId;
     const timeoutId = setTimeout(() => {
       fire();
-      intervalId = setInterval(fire, 30 * 60 * 1000);
+      intervalId = setInterval(() => fire(), 30 * 60 * 1000);
     }, msToSlot);
 
     setNotifActive(typeof Notification !== "undefined" && Notification.permission === "granted");
@@ -1492,29 +1629,33 @@ export default function DenizHQ() {
 
   // ── Test notification ─────────────────────────────────────────────────────
   const sendTestNotification = useCallback(async () => {
-    if (!("Notification" in window)) { alert("Notifications not supported."); return; }
+    if (!("Notification" in window)) { alert("Notifications not supported in this browser."); return; }
     let perm = Notification.permission;
     if (perm === "default") perm = await Notification.requestPermission();
-    if (perm !== "granted") { alert("Permission denied."); return; }
+    if (perm !== "granted") { alert("Notification permission denied. Please enable notifications for this site in your browser settings."); return; }
     setNotifActive(true);
-    setTimeout(() => {
-      try {
-        new Notification("Deniz HQ", {
-          body: "Notifications are working. Time to execute.",
-          icon: NOTIF_ICON, badge: NOTIF_ICON,
-          vibrate: [200, 100, 200], tag: "deniz-hq-test", requireInteraction: true,
-        });
-      } catch {
-        // SW fallback
-        navigator.serviceWorker.ready.then(reg =>
-          reg.active?.postMessage({ type: "SCHEDULE_NOTIFS", badge: NOTIF_ICON, icon: NOTIF_ICON, notifications: [{ delayMs: 100, title: "Deniz HQ", body: "Notifications are working. Time to execute." }] })
-        ).catch(console.warn);
-      }
-    }, 3000);
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      await reg.showNotification("Deniz HQ — Test", {
+        body: "Notifications working. You will be reminded every 30 minutes.",
+        icon: NOTIF_ICON,
+        badge: NOTIF_ICON,
+        vibrate: [200, 100, 200],
+        tag: "deniz-hq-test",
+        renotify: true,
+        requireInteraction: false,
+      });
+    } catch (e) {
+      console.warn("[Notif] Test notification failed:", e);
+      alert("Could not show notification: " + e.message);
+    }
   }, []);
 
   if (!loaded) return (
-    <div style={S.app}><div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", color: "rgba(255,255,255,0.3)", fontSize: 14, letterSpacing: 2 }}>LOADING</div></div>
+    <div style={{ ...S.app, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:"100vh", gap:16 }}>
+      <img src={LOGO} alt="" style={{ width:48, height:48, opacity:0.8, borderRadius:12 }} />
+      <div style={{ fontSize:11, color:"rgba(255,255,255,0.3)", letterSpacing:3, fontWeight:700 }}>LOADING</div>
+    </div>
   );
 
   const progress = todayTasks.length > 0
@@ -1775,7 +1916,13 @@ export default function DenizHQ() {
             </div>
 
             {/* Schedule — read-only */}
-            <div style={S.sectionLabel}>Schedule</div>
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12 }}>
+              <div style={{ ...S.sectionLabel, marginBottom:0 }}>Schedule</div>
+              <button onClick={() => { setTab("calendar"); setCalDate(new Date()); setTimeout(() => startEditDay(today), 100); }}
+                style={{ fontSize:10, color:"rgba(255,255,255,0.3)", background:"transparent", border:"none", cursor:"pointer", fontWeight:600, letterSpacing:0.5, padding:"4px 8px" }}>
+                EDIT
+              </button>
+            </div>
             {mergedTodaySchedule.map((s, i) => {
               const isGcal = s.source === "google";
               const status = isGcal ? (s.taskType === "display" ? "display" : getSchedStatus(s, td)) : getSchedStatus(s, td);
@@ -2726,7 +2873,8 @@ export default function DenizHQ() {
       <nav style={S.nav}>
         {tabs.map(t => (
           <button key={t.id} onClick={() => setTab(t.id)} style={{ ...S.navBtn, ...(tab===t.id?S.navActive:{}) }}>
-            {t.label}
+            {tab===t.id && <div style={{ position:"absolute", top:0, left:"50%", transform:"translateX(-50%)", width:20, height:2, borderRadius:1, background:"#fff" }} />}
+            <span style={{ fontSize:9, fontWeight:700, letterSpacing:0.5, marginTop:2 }}>{t.label.toUpperCase()}</span>
           </button>
         ))}
       </nav>
@@ -2738,19 +2886,19 @@ export default function DenizHQ() {
 const S = {
   app: { fontFamily:"'DM Sans',-apple-system,BlinkMacSystemFont,sans-serif", background:"radial-gradient(ellipse 100% 30% at 50% 0%, rgba(0,200,220,0.06) 0%, transparent 100%), #0A0A0F", color:"#F0F0F5", minHeight:"100vh", maxWidth:480, margin:"0 auto", position:"relative" },
 
-  header:       { display:"flex", justifyContent:"space-between", alignItems:"center", padding:"12px 16px", borderBottom:"1px solid rgba(255,255,255,0.05)" },
+  header:       { position:"sticky", top:0, zIndex:100, display:"flex", alignItems:"center", justifyContent:"space-between", padding:"14px 20px 14px", background:"rgba(10,10,15,0.92)", backdropFilter:"blur(20px)", WebkitBackdropFilter:"blur(20px)", borderBottom:"1px solid rgba(255,255,255,0.06)", boxShadow:"0 1px 0 rgba(255,255,255,0.03)" },
   logo:         { height:24, objectFit:"contain" },
   headerLeft:   { display:"flex", alignItems:"center", gap:10 },
   headerDivider:{ width:1, height:24, background:"rgba(255,255,255,0.15)" },
   headerTitle:  { fontSize:15, fontWeight:700, color:"#fff", letterSpacing:0.5 },
   headerRight:  { display:"flex", alignItems:"center", gap:12 },
-  streakBadge:  { display:"flex", alignItems:"center", background:"rgba(255,255,255,0.04)", borderRadius:20, padding:"4px 12px", fontSize:13, color:"#F59E0B" },
+  streakBadge:  { display:"flex", alignItems:"center", gap:4, padding:"5px 10px", borderRadius:20, background:"rgba(255,255,255,0.06)", border:"1px solid rgba(255,255,255,0.1)", fontSize:13, fontWeight:800, color:"#fff" },
   avatar:       { width:32, height:32, borderRadius:"50%", objectFit:"cover", border:"2px solid rgba(255,255,255,0.1)" },
 
   content: { padding:"16px 16px 0", paddingBottom:90 },
 
-  nav:       { position:"fixed", bottom:0, left:"50%", transform:"translateX(-50%)", width:"100%", maxWidth:480, display:"flex", background:"rgba(10,10,15,0.97)", borderTop:"1px solid rgba(255,255,255,0.05)", backdropFilter:"blur(20px)", zIndex:100, padding:"10px 0 env(safe-area-inset-bottom,10px)" },
-  navBtn:    { flex:1, background:"none", border:"none", color:"rgba(255,255,255,0.3)", fontSize:12, fontWeight:600, letterSpacing:0.5, cursor:"pointer", padding:"6px 0", textTransform:"uppercase" },
+  nav:       { position:"fixed", bottom:0, left:"50%", transform:"translateX(-50%)", width:"100%", maxWidth:480, display:"flex", background:"rgba(10,10,15,0.95)", backdropFilter:"blur(20px)", WebkitBackdropFilter:"blur(20px)", borderTop:"1px solid rgba(255,255,255,0.06)", zIndex:100, padding:"8px 0 calc(8px + env(safe-area-inset-bottom))" },
+  navBtn:    { flex:1, background:"none", border:"none", color:"rgba(255,255,255,0.3)", fontSize:9, fontWeight:700, letterSpacing:0.5, cursor:"pointer", padding:"6px 0 2px", display:"flex", flexDirection:"column", alignItems:"center", gap:3, position:"relative", textTransform:"uppercase" },
   navActive: { color:"#fff" },
 
   fab: { position:"fixed", bottom:80, right:"calc(50% - 240px + 16px)", width:48, height:48, borderRadius:24, background:"rgba(255,255,255,0.1)", border:"1px solid rgba(255,255,255,0.15)", backdropFilter:"blur(10px)", display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer", color:"#fff", zIndex:99, boxShadow:"0 4px 20px rgba(0,0,0,0.4)" },
@@ -2767,10 +2915,10 @@ const S = {
   welcomeL3: { fontSize:13, color:"rgba(255,255,255,0.35)" },
 
   progressSection: { display:"flex", alignItems:"center", gap:20, marginBottom:24 },
-  sectionLabel:    { fontSize:11, fontWeight:700, letterSpacing:1.5, textTransform:"uppercase", color:"rgba(255,255,255,0.25)", marginBottom:12 },
+  sectionLabel:    { fontSize:10, fontWeight:800, letterSpacing:2, color:"rgba(255,255,255,0.3)", textTransform:"uppercase", marginBottom:12, marginTop:4, display:"flex", alignItems:"center", gap:8 },
 
-  schedRow:    { display:"flex", alignItems:"center", gap:16, padding:"10px 12px", borderBottom:"1px solid rgba(255,255,255,0.03)", borderLeft:"3px solid transparent", borderRadius:8, marginBottom:2 },
-  schedNow:    { borderLeftColor:"#fff", background:"rgba(255,255,255,0.06)" },
+  schedRow:    { display:"flex", alignItems:"center", gap:10, padding:"11px 12px", marginBottom:4, borderRadius:10, background:"rgba(255,255,255,0.02)", border:"1px solid rgba(255,255,255,0.04)", transition:"background 0.15s ease" },
+  schedNow:    { background:"rgba(255,255,255,0.07)", border:"1px solid rgba(255,255,255,0.12)", boxShadow:"0 0 0 1px rgba(255,255,255,0.04)" },
   schedDone:   { borderLeftColor:"#4ADE80", background:"rgba(74,222,128,0.04)" },
   schedMissed: { borderLeftColor:"rgba(239,68,68,0.5)", background:"rgba(239,68,68,0.03)" },
   schedTime:   { fontSize:12, fontWeight:700, color:"rgba(255,255,255,0.3)", minWidth:44, display:"flex", flexDirection:"column", gap:3 },
@@ -2779,7 +2927,7 @@ const S = {
   schedName:   { fontSize:13, fontWeight:600, flex:1 },
   schedDur:    { fontSize:11, color:"rgba(255,255,255,0.25)" },
 
-  taskRow:     { display:"flex", flexWrap:"wrap", alignItems:"center", justifyContent:"space-between", padding:"14px 0", borderBottom:"1px solid rgba(255,255,255,0.04)", position:"relative" },
+  taskRow:     { display:"flex", flexWrap:"wrap", alignItems:"center", justifyContent:"space-between", padding:"14px 0", borderBottom:"1px solid rgba(255,255,255,0.04)", position:"relative", overflow:"hidden" },
   taskRowDone: { opacity:0.5 },
   taskLeft:    { display:"flex", alignItems:"center", gap:12 },
   taskIcon:    { color:"rgba(255,255,255,0.4)" },
@@ -2811,6 +2959,7 @@ const S = {
   checkTarget:  { fontSize:11, color:"rgba(255,255,255,0.25)" },
   checkInput:   { width:56, padding:"6px 8px", background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:6, color:"#fff", fontSize:16, fontWeight:700, textAlign:"right", outline:"none" },
 
+  card:      { background:"rgba(255,255,255,0.03)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:16, padding:"18px 16px", marginBottom:12 },
   chartCard: { background:"rgba(255,255,255,0.02)", borderRadius:12, padding:14, marginBottom:8, border:"1px solid rgba(255,255,255,0.04)" },
   chartHead: { display:"flex", justifyContent:"space-between", fontSize:12, fontWeight:600, marginBottom:10 },
   miniChart: { display:"flex", gap:3, height:40, alignItems:"flex-end" },
